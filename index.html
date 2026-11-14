@@ -61,7 +61,7 @@ h2{font-size:15px;padding:14px 14px 6px;color:var(--mut);font-weight:600}
 
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {getAuth,GoogleAuthProvider,signInWithPopup} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getAuth,GoogleAuthProvider,signInWithPopup,signOut} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {getDatabase,ref,onValue,set,update,runTransaction,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
 
 const cfg={databaseURL:"https://smart-28b05-default-rtdb.firebaseio.com",apiKey:"AIzaSyAmjXB_Ut1RppobclnvOGo-6HEuK3ldTTs",authDomain:"smart-28b05.firebaseapp.com",projectId:"smart-28b05",storageBucket:"smart-28b05.firebasestorage.app",messagingSenderId:"759362645716",appId:"1:759362645716:web:af2dd83ac39ae479395541"};
@@ -189,8 +189,12 @@ $("conn").onclick=async()=>{
   try{
     msg("Connecting...");
     const pr=new GoogleAuthProvider();pr.addScope("https://www.googleapis.com/auth/youtube.readonly");
+    pr.setCustomParameters({prompt:"consent select_account"});
+    try{await signOut(getAuth(app))}catch{}
     const r=await signInWithPopup(getAuth(app),pr);
     const tk=GoogleAuthProvider.credentialFromResult(r).accessToken;
+    const ti=await (await fetch("https://oauth2.googleapis.com/tokeninfo?access_token="+tk)).json();
+    if(!(ti.scope||"").includes("youtube"))throw new Error("YouTube permission was not given. On the Google screen, tick the box for YouTube and press Continue.");
     const g=async(path,q)=>{const x=await fetch("https://www.googleapis.com/youtube/v3/"+path+"?"+new URLSearchParams(q),{headers:{Authorization:"Bearer "+tk}});const j=await x.json();if(!x.ok)throw new Error((j.error&&j.error.message)||x.status);return j};
     const ch=await g("channels",{part:"contentDetails",mine:"true"});
     const defs=[{id:ch.items[0].contentDetails.relatedPlaylists.likes,name:"Liked videos"}];
