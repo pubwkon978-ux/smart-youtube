@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Smart YouTube</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Smart YouTube">
+<style>
+:root{--red:#e50000;--mut:#9a9a9a;--line:#2a1a1a}
+*{box-sizing:border-box;margin:0}
+html,body{background:#000;color:#fff;font:15px/1.4 "Segoe UI",system-ui,sans-serif}
+body{max-width:720px;margin:auto;padding:env(safe-area-inset-top) 0 calc(24px + env(safe-area-inset-bottom))}
+header{display:flex;align-items:center;gap:10px;padding:12px 14px}
+header img{width:38px;height:38px;border-radius:10px}
+h1{font:italic 800 22px/1 "Segoe UI",system-ui,sans-serif;letter-spacing:-.3px}
+#dev{margin-left:auto;font-size:12px;color:var(--mut)}
+.stage{aspect-ratio:16/9;background:#120a0a;position:relative}
+.stage iframe,#yt{position:absolute;inset:0;width:100%;height:100%}
+.bar{padding:12px 14px;display:flex;gap:8px;align-items:center}
+#title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+button{font:inherit;font-weight:600;border:0;border-radius:999px;padding:10px 16px;background:var(--red);color:#fff;cursor:pointer}
+button.g{background:#2a1818}
+button:focus-visible,input:focus-visible{outline:2px solid #fff;outline-offset:2px}
+form{display:flex;gap:8px;padding:0 14px 8px}
+input{flex:1;min-width:0;background:#150d0d;border:1px solid var(--line);border-radius:999px;color:#fff;padding:11px 16px;font:inherit}
+#msg{padding:0 14px 6px;color:#ff8a8a;font-size:13px}
+h2{font-size:15px;padding:14px 14px 6px;color:var(--mut);font-weight:600}
+.row{display:flex;gap:10px;align-items:center;padding:8px 14px;border-top:1px solid var(--line)}
+.row img{width:96px;aspect-ratio:16/9;object-fit:cover;border-radius:8px;background:#222;flex:none}
+.row .t{flex:1;min-width:0;font-size:14px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.row .t small{color:var(--mut);display:block}
+.row button{padding:8px 12px;font-size:13px}
+.empty{padding:6px 14px;color:var(--mut);font-size:14px}
+#join{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;flex-direction:column;gap:14px;align-items:center;justify-content:center;text-align:center;padding:24px;z-index:9}
+#join img{width:120px;border-radius:26px}
+#join p{color:var(--mut)}
+#join button{font-size:18px;padding:14px 38px}
+</style></head>
+<body>
+<div id="join"><img src="icon-192.png" alt=""><h1>Smart YouTube</h1><p>Tap to start listening with everyone</p><button id="jb">Join</button></div>
+<header><img src="icon-192.png" alt=""><h1>Smart YouTube</h1><span id="dev"></span></header>
+<div class="stage"><div id="yt"></div></div>
+<div class="bar"><div id="title">Nothing playing yet</div><button id="pp">Play</button><button id="nx" class="g">Next</button><button id="mu" class="g">Mute me</button></div>
+<form id="f"><input id="q" placeholder="Search a song or paste a YouTube link" autocomplete="off"><button>Search</button></form>
+<div id="msg"></div>
+<div id="res"></div>
+<h2>Up next</h2>
+<div id="queue"></div>
+
+<script type="module">
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import {getDatabase,ref,onValue,update,runTransaction,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js";
+
+const cfg={databaseURL:"https://smart-28b05-default-rtdb.firebaseio.com",apiKey:"AIzaSyAmjXB_Ut1RppobclnvOGo-6HEuK3ldTTs",authDomain:"smart-28b05.firebaseapp.com",projectId:"smart-28b05",storageBucket:"smart-28b05.firebasestorage.app",messagingSenderId:"759362645716",appId:"1:759362645716:web:af2dd83ac39ae479395541"};
+const YT_KEY=cfg.apiKey; // YouTube Data API v3 key (for search)
+const db=getDatabase(initializeApp(cfg));
+const stRef=ref(db,"smart/state");
+const me=Math.random().toString(36).slice(2,8);
+const $=id=>document.getElementById(id);
+let player,ready=false,joined=false,applying=false,at,st=null,cur=null,offset=0,lt=0,lw=0;
+
+const dec=s=>{const t=document.createElement("textarea");t.innerHTML=s;return t.value};
+const thumb=id=>"https://i.ytimg.com/vi/"+id+"/mqdefault.jpg";
+const msg=t=>$("msg").textContent=t||"";
+const expected=s=>s.pos+(s.playing&&s.ts?(Date.now()+offset-s.ts)/1000:0);
+const push=p=>update(stRef,{...p,ts:serverTimestamp(),by:me}).catch(()=>msg("Could not reach the server. Check the database rules."));
+const tx=fn=>runTransaction(stRef,cur=>{
+  const s={...(cur||{})};delete s.ts;s.queue=[...(s.queue||[])];
+  const r=fn(s);if(!r)return;
+  return {...r,pos:r.pos||0,ts:serverTimestamp(),by:me};
+}).catch(()=>msg("Could not reach the server. Check the database rules."));
+const startNext=s=>{const n=s.queue.shift();if(n){s.videoId=n.id;s.title=n.title;s.playing=true;s.pos=0}else s.playing=false;return s};
+const playNow=i=>tx(s=>({...s,videoId:i.id,title:i.title,playing:true,pos:0}));
+const add=i=>tx(s=>{s.queue.push(i);if(!s.videoId)startNext(s);return s});
+const next=ended=>tx(s=>{if(ended&&s.videoId!==ended)return null;return startNext(s)});
+
+onValue(ref(db,".info/serverTimeOffset"),sn=>{offset=sn.val()||0});
+
+// YouTube player
+const sc=document.createElement("script");sc.src="https://www.youtube.com/iframe_api";document.head.appendChild(sc);
+window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("yt",{width:"100%",height:"100%",playerVars:{playsinline:1,rel:0,modestbranding:1},events:{onReady:()=>{ready=true;apply(st)},onStateChange:onState}})};
+const act=f=>{applying=true;clearTimeout(at);at=setTimeout(()=>applying=false,1500);f()};
+
+function apply(s){
+  if(!ready||!joined||!s||!s.videoId)return;
+  const t=Math.max(0,expected(s));
+  if(cur!==s.videoId){cur=s.videoId;act(()=>s.playing?player.loadVideoById({videoId:cur,startSeconds:t}):player.cueVideoById({videoId:cur,startSeconds:t}));return}
+  const ps=player.getPlayerState();
+  if(Math.abs(player.getCurrentTime()-t)>2.5)act(()=>player.seekTo(t,true));
+  if(s.playing&&ps!==1&&ps!==3)act(()=>player.playVideo());
+  if(!s.playing&&ps===1)act(()=>player.pauseVideo());
+}
+function onState(e){
+  if(!joined||applying)return;
+  const k=e.data,t=player.getCurrentTime();
+  if(k===0){next(cur);return}
+  if(k!==1&&k!==2)return;
+  if(st&&st.videoId===cur&&st.playing===(k===1)&&Math.abs(t-expected(st))<2.5)return;
+  push({videoId:cur,playing:k===1,pos:t});
+}
+// detect seeks made with the player's own progress bar
+setInterval(()=>{
+  if(!ready||!joined||!cur)return;
+  const ps=player.getPlayerState(),t=player.getCurrentTime(),w=Date.now();
+  if(ps===1&&lw&&!applying&&Math.abs(t-(lt+(w-lw)/1000))>2.5)push({videoId:cur,playing:true,pos:t});
+  lt=t;lw=ps===1?w:0;
+},1000);
+
+// UI
+function row(i,btns){
+  const r=document.createElement("div");r.className="row";
+  const im=document.createElement("img");im.src=thumb(i.id);im.alt="";
+  const t=document.createElement("div");t.className="t";t.textContent=i.title;
+  if(i.ch){const s=document.createElement("small");s.textContent=i.ch;t.appendChild(s)}
+  r.append(im,t);
+  btns.forEach(([l,fn,g])=>{const b=document.createElement("button");b.textContent=l;if(g)b.className="g";b.onclick=fn;r.appendChild(b)});
+  return r;
+}
+function render(s){
+  $("title").textContent=s.videoId?(s.title||"Playing"):"Nothing playing yet";
+  $("pp").textContent=s.playing?"Pause":"Play";
+  const q=$("queue");q.innerHTML="";
+  const list=s.queue||[];
+  if(!list.length){const d=document.createElement("div");d.className="empty";d.textContent="The queue is empty. Search for a song and add it.";q.appendChild(d)}
+  list.forEach((i,n)=>q.appendChild(row(i,[["Play",()=>tx(x=>{x.queue.splice(n,1);return {...x,videoId:i.id,title:i.title,playing:true,pos:0}})],["Remove",()=>tx(x=>{if(x.queue[n]&&x.queue[n].id===i.id)x.queue.splice(n,1);return x}),1]])));
+}
+function showRes(items){
+  const r=$("res");r.innerHTML="";
+  if(!items.length)return msg("No results.");
+  const h=document.createElement("h2");h.textContent="Results";r.appendChild(h);
+  items.forEach(i=>r.appendChild(row(i,[["Play",()=>{playNow(i);r.innerHTML=""}],["Add",()=>add(i),1]])));
+}
+const vid=q=>{const m=q.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([\w-]{11})/)||q.match(/^([\w-]{11})$/);return m&&m[1]};
+$("f").onsubmit=async e=>{
+  e.preventDefault();const q=$("q").value.trim();if(!q)return;msg("");
+  const id=vid(q);
+  if(id){let title="YouTube video";
+    try{const r=await fetch("https://noembed.com/embed?url=https://www.youtube.com/watch?v="+id);title=(await r.json()).title||title}catch{}
+    add({id,title});$("q").value="";return}
+  try{
+    const r=await fetch("https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=15&q="+encodeURIComponent(q)+"&key="+YT_KEY);
+    const j=await r.json();if(!r.ok)throw 0;
+    showRes(j.items.map(i=>({id:i.id.videoId,title:dec(i.snippet.title),ch:dec(i.snippet.channelTitle)})));
+  }catch{msg("Search is not working. Enable YouTube Data API v3 for this key, or paste a YouTube link instead.")}
+};
+$("pp").onclick=()=>{if(!st||!st.videoId)return;push({videoId:st.videoId,playing:!st.playing,pos:joined&&ready?player.getCurrentTime():Math.max(0,expected(st))})};
+$("nx").onclick=()=>next();
+$("mu").onclick=()=>{if(!ready)return;if(player.isMuted()){player.unMute();$("mu").textContent="Mute me"}else{player.mute();$("mu").textContent="Unmute me"}};
+
+async function keepAwake(){try{await navigator.wakeLock.request("screen")}catch{}}
+document.addEventListener("visibilitychange",()=>{if(joined&&!document.hidden){keepAwake();apply(st)}});
+$("jb").onclick=()=>{joined=true;$("join").style.display="none";keepAwake();apply(st)};
+
+onValue(stRef,sn=>{
+  if(!sn.exists())return;
+  st=sn.val();render(st);apply(st);
+},()=>msg("Could not reach the server. Check the database rules."));
+</script>
+</body></html>
