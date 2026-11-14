@@ -21,6 +21,7 @@ h1{font:italic 800 22px/1 "Segoe UI",system-ui,sans-serif;letter-spacing:-.3px}
 #dev{margin-left:auto;font-size:12px;color:var(--mut)}
 .stage{aspect-ratio:16/9;background:#120a0a;position:relative}
 .stage iframe,#yt{position:absolute;inset:0;width:100%;height:100%}
+#tap{position:absolute;inset:0;margin:auto;width:max-content;height:max-content;z-index:2;font-size:18px;padding:14px 34px;display:none}
 .bar{padding:12px 14px;display:flex;gap:8px;align-items:center}
 #title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
 button{font:inherit;font-weight:600;border:0;border-radius:999px;padding:10px 16px;background:var(--red);color:#fff;cursor:pointer}
@@ -44,7 +45,7 @@ h2{font-size:15px;padding:14px 14px 6px;color:var(--mut);font-weight:600}
 <body>
 <div id="join"><img src="icon-192.png" alt=""><h1>Smart YouTube</h1><p>Tap to start listening with everyone</p><button id="jb">Join</button></div>
 <header><img src="icon-192.png" alt=""><h1>Smart YouTube</h1><span id="dev"></span></header>
-<div class="stage"><div id="yt"></div></div>
+<div class="stage"><div id="yt"></div><button id="tap">Tap to play</button></div>
 <div class="bar"><div id="title">Nothing playing yet</div><button id="pp">Play</button><button id="nx" class="g">Next</button><button id="mu" class="g">Mute me</button></div>
 <form id="f"><input id="q" placeholder="Search a song or paste a YouTube link" autocomplete="off"><button>Search</button></form>
 <div id="msg"></div>
@@ -62,7 +63,7 @@ const db=getDatabase(initializeApp(cfg));
 const stRef=ref(db,"smart/state");
 const me=Math.random().toString(36).slice(2,8);
 const $=id=>document.getElementById(id);
-let player,ready=false,joined=false,applying=false,at,st=null,cur=null,offset=0,lt=0,lw=0;
+let player,ready=false,joined=false,applying=false,at,st=null,cur=null,offset=0,lt=0,lw=0,started=false;
 
 const dec=s=>{const t=document.createElement("textarea");t.innerHTML=s;return t.value};
 const thumb=id=>"https://i.ytimg.com/vi/"+id+"/mqdefault.jpg";
@@ -83,23 +84,27 @@ onValue(ref(db,".info/serverTimeOffset"),sn=>{offset=sn.val()||0});
 
 // YouTube player
 const sc=document.createElement("script");sc.src="https://www.youtube.com/iframe_api";document.head.appendChild(sc);
-window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("yt",{width:"100%",height:"100%",playerVars:{playsinline:1,rel:0,modestbranding:1},events:{onReady:()=>{ready=true;apply(st)},onStateChange:onState}})};
+window.onYouTubeIframeAPIReady=()=>{player=new YT.Player("yt",{width:"100%",height:"100%",playerVars:{playsinline:1,rel:0,modestbranding:1},events:{onReady:()=>{ready=true;apply(st)},onStateChange:onState,onError:e=>msg("This video cannot play here (error "+e.data+"). Try another song.")}})};
+const checkPlay=()=>{setTimeout(()=>{if(!st||!st.playing||!joined||!ready)return;const k=player.getPlayerState();if(k!==1&&k!==3&&k!==0)$("tap").style.display="flex"},3500)};
 const act=f=>{applying=true;clearTimeout(at);at=setTimeout(()=>applying=false,1500);f()};
 
 function apply(s){
   if(!ready||!joined||!s||!s.videoId)return;
   const t=Math.max(0,expected(s));
-  if(cur!==s.videoId){cur=s.videoId;act(()=>s.playing?player.loadVideoById({videoId:cur,startSeconds:t}):player.cueVideoById({videoId:cur,startSeconds:t}));return}
+  if(cur!==s.videoId){cur=s.videoId;started=false;if(s.playing)checkPlay();act(()=>s.playing?player.loadVideoById({videoId:cur,startSeconds:t}):player.cueVideoById({videoId:cur,startSeconds:t}));return}
   const ps=player.getPlayerState();
   if(Math.abs(player.getCurrentTime()-t)>2.5)act(()=>player.seekTo(t,true));
-  if(s.playing&&ps!==1&&ps!==3)act(()=>player.playVideo());
+  if(s.playing&&ps!==1&&ps!==3){act(()=>player.playVideo());checkPlay()}
   if(!s.playing&&ps===1)act(()=>player.pauseVideo());
 }
 function onState(e){
+  const k=e.data;
+  if(k===1){started=true;$("tap").style.display="none";msg("")}
   if(!joined||applying)return;
-  const k=e.data,t=player.getCurrentTime();
+  const t=player.getCurrentTime();
   if(k===0){next(cur);return}
   if(k!==1&&k!==2)return;
+  if(k===2&&!started)return;
   if(st&&st.videoId===cur&&st.playing===(k===1)&&Math.abs(t-expected(st))<2.5)return;
   push({videoId:cur,playing:k===1,pos:t});
 }
@@ -149,6 +154,7 @@ $("f").onsubmit=async e=>{
   }catch{msg("Search is not working. Enable YouTube Data API v3 for this key, or paste a YouTube link instead.")}
 };
 $("pp").onclick=()=>{if(!st||!st.videoId)return;push({videoId:st.videoId,playing:!st.playing,pos:joined&&ready?player.getCurrentTime():Math.max(0,expected(st))})};
+$("tap").onclick=()=>{$("tap").style.display="none";if(st&&st.videoId)act(()=>{player.seekTo(Math.max(0,expected(st)),true);player.playVideo()})};
 $("nx").onclick=()=>next();
 $("mu").onclick=()=>{if(!ready)return;if(player.isMuted()){player.unMute();$("mu").textContent="Mute me"}else{player.mute();$("mu").textContent="Unmute me"}};
 
